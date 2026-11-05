@@ -1,214 +1,192 @@
 (function () {
   'use strict';
-  var $ = App.$, esc = App.escapeHtml;
+  var $ = App.$, esc = App.esc;
 
-  /* ---------------- 人民币大写 ---------------- */
-  function rmbUpper(input) {
-    var s = String(input).replace(/[,，\s]/g, '');
-    if (!/^-?\d+(\.\d+)?$/.test(s)) throw new Error('请输入合法的数字');
-    var neg = s[0] === '-'; if (neg) s = s.slice(1);
-    var parts = s.split('.');
-    var intPart = parts[0].replace(/^0+(?=\d)/, '');
-    var dec = ((parts[1] || '') + '00').slice(0, 2);
-    if (intPart.length > 12) throw new Error('数值过大（最多支持千亿级，12 位整数）');
-    var digits = '零壹贰叁肆伍陆柒捌玖', units = ['', '拾', '佰', '仟'], bigUnits = ['', '万', '亿'];
-    var result = '';
-    if (+intPart > 0) {
-      var zero = 0;
-      for (var i = 0; i < intPart.length; i++) {
-        var p = intPart.length - i - 1, d = +intPart[i], q = Math.floor(p / 4), m = p % 4;
-        if (d === 0) zero++;
-        else { if (zero > 0) result += '零'; zero = 0; result += digits[d] + units[m]; }
-        if (m === 0 && zero < 4) result += bigUnits[q];
-      }
-      result += '元';
-    }
-    var jiao = +dec[0], fen = +dec[1];
-    if (!jiao && !fen) return (neg ? '负' : '') + (result || '零元') + '整';
-    if (jiao) result += digits[jiao] + '角';
-    else if (result) result += '零';
-    result += fen ? digits[fen] + '分' : '整';
-    return (neg ? '负' : '') + result;
-  }
-
+  /* ===== 文本统计 ===== */
   App.register({
-    id: 'rmb', group: 'text', icon: '¥', title: '人民币大写转换',
-    desc: '将数字金额转换为人民币大写格式', keywords: 'rmb 金额 大写 财务',
-    render: function (el) {
-      el.innerHTML = '<label class="field-label">金额（支持千分位，最多两位小数）</label>' +
-        '<input type="text" id="rmbIn" value="1234567.89" style="font-size:1.2rem">' +
-        '<label class="field-label" style="margin-top:14px">大写结果</label><div class="output big-output" id="rmbOut"></div>' +
-        '<div class="row" style="margin-top:12px"><button class="btn" id="rmbCopy">复制结果</button></div>';
+    id: 'textstat', group: 'text', icon: 'Σ', title: '文本统计', accepts: true,
+    desc: '字符、汉字、单词、行数、字节数实时统计，估算阅读时长', kw: 'zstj 字数 统计 字符 计数 word count',
+    render: function (el, ctx) {
+      el.innerHTML = '<div class="pane"><div class="pane-body flush"><textarea id="in" data-persist placeholder="输入或粘贴文本…" style="min-height:300px"></textarea></div></div><div class="stats" id="stats"></div>';
       function run() {
-        var v = $('#rmbIn').value.trim(), out = $('#rmbOut');
-        if (!v) { out.textContent = ''; return; }
-        try { out.textContent = rmbUpper(v); out.classList.remove('error'); } catch (e) { out.textContent = e.message; out.classList.add('error'); }
+        var t = $('#in', el).value, cjk = (t.match(/[\u3400-\u9fff\uf900-\ufaff]/g) || []).length, words = (t.match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g) || []).length;
+        var d = [['总字符', Array.from(t).length], ['不含空白', Array.from(t.replace(/\s/g, '')).length], ['汉字', cjk], ['英文单词', words],
+          ['数字', (t.match(/\d+(\.\d+)?/g) || []).length], ['标点', (t.match(/[\u3000-\u303f\uff00-\uffef!-/:-@[-`{-~]/g) || []).length],
+          ['行数', t ? t.split(/\r?\n/).length : 0], ['段落', t.split(/\n+/).filter(function (p) { return p.trim(); }).length],
+          ['UTF-8 字节', new TextEncoder().encode(t).length], ['阅读时长', Math.max(0, Math.ceil((cjk / 400) + (words / 220))) + ' 分钟']];
+        $('#stats', el).innerHTML = d.map(function (x) { return '<div class="stat"><b>' + x[1] + '</b><span>' + x[0] + '</span></div>'; }).join('');
       }
-      $('#rmbIn').addEventListener('input', run);
-      $('#rmbCopy').onclick = function () { App.copy($('#rmbOut').textContent); };
-      run();
+      $('#in', el).addEventListener('input', run);
+      ctx.persist(); if (ctx.input) $('#in', el).value = ctx.input; run();
     }
   });
 
-  /* ---------------- Markdown 编辑器 ---------------- */
-  var MD_SAMPLE = '# Markdown 编辑器\n\n左侧编辑，右侧**实时预览**。内容自动保存在浏览器本地。\n\n## 列表\n- 支持 GFM 语法\n- [x] 任务列表\n- `行内代码`\n\n## 代码\n```js\nconsole.log("Hello, World!");\n```\n\n> 引用文字\n\n| 表头 | 表头 |\n| --- | --- |\n| 单元格 | 单元格 |\n';
+  /* ===== 去重排序 ===== */
   App.register({
-    id: 'markdown', group: 'text', icon: 'MD', title: 'Markdown编辑器',
-    desc: '在线编辑 Markdown 文档，实时预览，支持导出', keywords: 'markdown md 编辑器 预览',
-    scripts: ['vendor/marked.min.js', 'vendor/purify.min.js'],
-    render: function (el) {
-      el.innerHTML = '<div class="row"><button class="btn" id="mdCopyHtml">复制 HTML</button><button class="btn ghost" id="mdDlMd">下载 .md</button><button class="btn ghost" id="mdDlHtml">下载 .html</button><button class="btn ghost" id="mdClear">清空</button></div>' +
-        '<div class="cols"><textarea id="mdIn" style="min-height:520px"></textarea><div class="preview-box md-preview" id="mdOut" style="height:520px"></div></div>';
-      var ta = $('#mdIn');
-      ta.value = localStorage.getItem('tool_md') || MD_SAMPLE;
-      function html() { return DOMPurify.sanitize(marked.parse(ta.value, { gfm: true, breaks: true })); }
-      function run() { $('#mdOut').innerHTML = html(); localStorage.setItem('tool_md', ta.value); }
-      ta.addEventListener('input', run);
-      $('#mdCopyHtml').onclick = function () { App.copy(html()); };
-      $('#mdDlMd').onclick = function () { App.download('document.md', ta.value); };
-      $('#mdDlHtml').onclick = function () {
-        App.download('document.html', '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Document</title></head><body>' + html() + '</body></html>', 'text/html;charset=utf-8');
-      };
-      $('#mdClear').onclick = function () { ta.value = ''; run(); };
-      run();
+    id: 'dedupe', group: 'text', icon: '≡', title: '行处理', accepts: true,
+    desc: '按行去重、排序、打乱、去空行、加前后缀，统计重复次数', kw: 'qc 去重 排序 重复 行 sort uniq',
+    render: function (el, ctx) {
+      el.innerHTML = '<div class="pane"><div class="pane-body"><div class="inline"><label class="check"><input type="checkbox" id="uniq" data-persist checked>去重</label><label class="check"><input type="checkbox" id="trim" data-persist checked>去首尾空白</label><label class="check"><input type="checkbox" id="empty" data-persist checked>删除空行</label><label class="check"><input type="checkbox" id="icase" data-persist>忽略大小写</label><label class="check"><input type="checkbox" id="count" data-persist>显示重复次数</label>' +
+        '<select id="sort" class="w160" data-persist><option value="">保持顺序</option><option value="asc">升序</option><option value="desc">降序</option><option value="len">按长度</option><option value="rev">倒序</option><option value="shuffle">随机打乱</option></select></div>' +
+        '<div class="inline"><input type="text" id="pre" placeholder="每行前缀" data-persist><input type="text" id="suf" placeholder="每行后缀" data-persist><input type="text" id="join" placeholder="合并分隔符（留空则换行）" data-persist></div></div></div>' +
+        '<div class="grid2"><div class="pane"><div class="pane-head"><h3>输入</h3></div><div class="pane-body flush"><textarea id="in" data-persist style="min-height:380px">apple\nbanana\napple\n\norange\nBanana\nbanana</textarea></div></div>' +
+        '<div class="pane"><div class="pane-head"><h3>结果</h3><span class="msg" id="info"></span><button class="btn sm" data-copy="#out">复制</button><button class="btn sm" data-send="#out">发送到 ▾</button></div><div class="pane-body flush"><textarea id="out" readonly style="min-height:380px"></textarea></div></div></div>';
+      function run() {
+        var lines = $('#in', el).value.split(/\r?\n/), ic = $('#icase', el).checked, cnt = {}, order = [], out = [];
+        lines.forEach(function (l) {
+          var v = $('#trim', el).checked ? l.trim() : l;
+          if ($('#empty', el).checked && !v.trim()) return;
+          var k = ic ? v.toLowerCase() : v;
+          if (!(k in cnt)) { cnt[k] = 0; order.push([k, v]); } else if (!$('#uniq', el).checked) order.push([k, v]);
+          cnt[k]++;
+        });
+        out = order.map(function (x) { return x; });
+        var s = $('#sort', el).value, cmp = function (a, b) { return a[1].localeCompare(b[1], 'zh-CN'); };
+        if (s === 'asc') out.sort(cmp); else if (s === 'desc') out.sort(cmp).reverse(); else if (s === 'len') out.sort(function (a, b) { return a[1].length - b[1].length; });
+        else if (s === 'rev') out.reverse(); else if (s === 'shuffle') for (var i = out.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)), t = out[i]; out[i] = out[j]; out[j] = t; }
+        var pre = $('#pre', el).value, suf = $('#suf', el).value, sep = $('#join', el).value;
+        $('#out', el).value = out.map(function (x) { return pre + x[1] + suf + ($('#count', el).checked ? '\t(' + cnt[x[0]] + ')' : ''); }).join(sep ? sep.replace(/\\n/g, '\n').replace(/\\t/g, '\t') : '\n');
+        $('#info', el).textContent = lines.length + ' 行 → ' + out.length + ' 行';
+      }
+      el.addEventListener('input', run); el.addEventListener('change', run);
+      ctx.persist(); if (ctx.input) $('#in', el).value = ctx.input; run();
     }
   });
 
-  /* ---------------- 特效文字 ---------------- */
-  function mapRange(str, upperStart, lowerStart, digitStart, exceptions) {
-    return Array.from(str).map(function (ch) {
-      if (exceptions && exceptions[ch]) return exceptions[ch];
-      var c = ch.charCodeAt(0);
-      if (c >= 65 && c <= 90 && upperStart) return String.fromCodePoint(upperStart + c - 65);
-      if (c >= 97 && c <= 122 && lowerStart) return String.fromCodePoint(lowerStart + c - 97);
-      if (c >= 48 && c <= 57 && digitStart) return String.fromCodePoint(digitStart + c - 48);
-      return ch;
-    }).join('');
+  /* ===== 文本对比 ===== */
+  function lcsDiff(a, b) {
+    var n = a.length, m = b.length;
+    if (n * m > 9e6) throw new Error('文本过大，请分段对比');
+    var dp = []; for (var i = 0; i <= n; i++) dp.push(new Uint32Array(m + 1));
+    for (i = n - 1; i >= 0; i--) for (var j = m - 1; j >= 0; j--) dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    var out = []; i = 0; j = 0;
+    while (i < n && j < m) {
+      if (a[i] === b[j]) { out.push([' ', i, j]); i++; j++; }
+      else if (dp[i + 1][j] >= dp[i][j + 1]) out.push(['-', i++, -1]);
+      else out.push(['+', -1, j++]);
+    }
+    while (i < n) out.push(['-', i++, -1]);
+    while (j < m) out.push(['+', -1, j++]);
+    return out;
   }
-  function combine(str, mark) { return Array.from(str).map(function (c) { return c === ' ' ? c : c + mark; }).join(''); }
-  var FANCY = [
-    ['粗体', function (s) { return mapRange(s, 0x1D400, 0x1D41A, 0x1D7CE); }],
-    ['斜体', function (s) { return mapRange(s, 0x1D434, 0x1D44E, 0, { h: 'ℎ' }); }],
-    ['粗斜体', function (s) { return mapRange(s, 0x1D468, 0x1D482); }],
-    ['手写体', function (s) { return mapRange(s, 0x1D4D0, 0x1D4EA); }],
-    ['哥特体', function (s) { return mapRange(s, 0x1D56C, 0x1D586); }],
-    ['空心体', function (s) { return mapRange(s, 0x1D538, 0x1D552, 0x1D7D8, { C: 'ℂ', H: 'ℍ', N: 'ℕ', P: 'ℙ', Q: 'ℚ', R: 'ℝ', Z: 'ℤ' }); }],
-    ['等宽体', function (s) { return mapRange(s, 0x1D670, 0x1D68A, 0x1D7F6); }],
-    ['圆圈字', function (s) { return mapRange(s, 0x24B6, 0x24D0, 0, { '0': '⓪', '1': '①', '2': '②', '3': '③', '4': '④', '5': '⑤', '6': '⑥', '7': '⑦', '8': '⑧', '9': '⑨' }); }],
-    ['全角', function (s) { return Array.from(s).map(function (c) { var n = c.charCodeAt(0); return n > 32 && n < 127 ? String.fromCharCode(n + 0xFEE0) : (c === ' ' ? '\u3000' : c); }).join(''); }],
-    ['删除线', function (s) { return combine(s, '\u0336'); }],
-    ['下划线', function (s) { return combine(s, '\u0332'); }],
-    ['波浪线', function (s) { return combine(s, '\u0330'); }],
-    ['倒序', function (s) { return Array.from(s).reverse().join(''); }]
+  App.register({
+    id: 'diff', group: 'text', icon: '±', title: '文本对比', accepts: true,
+    desc: '逐行比较两段文本，高亮新增与删除，可只看差异', kw: 'diff db 对比 差异 比较',
+    render: function (el, ctx) {
+      el.innerHTML = '<div class="grid2"><div class="pane"><div class="pane-head"><h3>原文</h3></div><div class="pane-body flush"><textarea id="a" data-persist style="min-height:200px">第一行\n第二行\n第三行\n第四行</textarea></div></div>' +
+        '<div class="pane"><div class="pane-head"><h3>新文本</h3></div><div class="pane-body flush"><textarea id="b" data-persist style="min-height:200px">第一行\n第二行（已修改）\n第三行\n第五行</textarea></div></div></div>' +
+        '<div class="pane"><div class="pane-head"><h3>差异</h3><span id="info" class="msg"></span><label class="check"><input type="checkbox" id="trim" data-persist>忽略首尾空白</label><label class="check"><input type="checkbox" id="icase" data-persist>忽略大小写</label><label class="check"><input type="checkbox" id="only" data-persist>只看差异</label></div><div class="pane-body flush" id="out" style="padding:8px 0;max-height:520px;overflow:auto"></div></div>';
+      function run() {
+        if (!el.isConnected) return;
+        var norm = function (s) { if ($('#trim', el).checked) s = s.trim(); if ($('#icase', el).checked) s = s.toLowerCase(); return s; };
+        var A = $('#a', el).value.split(/\r?\n/), B = $('#b', el).value.split(/\r?\n/), only = $('#only', el).checked;
+        try {
+          var r = lcsDiff(A.map(norm), B.map(norm)), add = 0, del = 0;
+          $('#out', el).innerHTML = r.map(function (x) {
+            if (x[0] === '+') add++; if (x[0] === '-') del++;
+            if (only && x[0] === ' ') return '';
+            var text = x[0] === '+' ? B[x[2]] : A[x[1]];
+            return '<div class="diff-line ' + (x[0] === '+' ? 'diff-add' : x[0] === '-' ? 'diff-del' : '') + '"><span class="n">' + (x[1] >= 0 ? x[1] + 1 : '') + ' · ' + (x[2] >= 0 ? x[2] + 1 : '') + '</span><span>' + x[0] + ' ' + esc(text) + '</span></div>';
+          }).join('');
+          $('#info', el).innerHTML = add + del ? '<span class="ok">+' + add + '</span> <span class="err">-' + del + '</span>' : '<span class="ok">完全相同</span>';
+        } catch (e) { $('#out', el).innerHTML = '<p class="err" style="padding:12px">' + esc(e.message) + '</p>'; }
+      }
+      var timer; el.addEventListener('input', function () { clearTimeout(timer); timer = setTimeout(run, 250); }); el.addEventListener('change', run);
+      ctx.persist(); if (ctx.input) $('#b', el).value = ctx.input; run();
+    }
+  });
+
+  /* ===== 命名风格转换 ===== */
+  function words(s) {
+    return s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2').split(/[^A-Za-z0-9\u4e00-\u9fa5]+/).filter(Boolean).map(function (w) { return w.toLowerCase(); });
+  }
+  var CASES = [
+    ['camelCase', function (w) { return w.map(function (x, i) { return i ? x[0].toUpperCase() + x.slice(1) : x; }).join(''); }],
+    ['PascalCase', function (w) { return w.map(function (x) { return x[0].toUpperCase() + x.slice(1); }).join(''); }],
+    ['snake_case', function (w) { return w.join('_'); }],
+    ['CONSTANT_CASE', function (w) { return w.join('_').toUpperCase(); }],
+    ['kebab-case', function (w) { return w.join('-'); }],
+    ['dot.case', function (w) { return w.join('.'); }],
+    ['path/case', function (w) { return w.join('/'); }],
+    ['Title Case', function (w) { return w.map(function (x) { return x[0].toUpperCase() + x.slice(1); }).join(' '); }],
+    ['Sentence case', function (w) { var s = w.join(' '); return s.charAt(0).toUpperCase() + s.slice(1); }],
+    ['lower case', function (w) { return w.join(' '); }],
+    ['UPPER CASE', function (w) { return w.join(' ').toUpperCase(); }]
   ];
-  var GRADIENTS = [['#667eea', '#764ba2'], ['#f093fb', '#f5576c'], ['#4facfe', '#00f2fe'], ['#43e97b', '#38f9d7'], ['#fa709a', '#fee140'], ['#ff0844', '#ffb199'], ['#ff512f', '#dd2476']];
   App.register({
-    id: 'fancytext', group: 'text', icon: 'Aa', title: '特效文字生成',
-    desc: '生成花式 Unicode 字体与彩色渐变文字', keywords: '花式字体 特殊字体 渐变 文字',
-    render: function (el) {
-      el.innerHTML = '<label class="field-label">输入文字</label><input type="text" id="ftIn" value="Hello World 2026">' +
-        '<h3 style="margin:18px 0 8px;font-size:1rem">渐变文字（CSS）</h3>' +
-        '<div class="row"><label>起始色</label><input type="color" id="ftC1" value="#667eea"><label>结束色</label><input type="color" id="ftC2" value="#764ba2"><label>角度</label><input type="range" id="ftDeg" min="0" max="360" value="90"><span id="ftPresets" class="history"></span></div>' +
-        '<div class="fancy-out" id="ftGrad"></div><div class="row"><button class="btn ghost sm" id="ftCss">复制 CSS</button></div>' +
-        '<h3 style="margin:18px 0 8px;font-size:1rem">花式字体（可直接复制到社交平台）</h3><ul class="list" id="ftList"></ul>';
-      $('#ftPresets').innerHTML = GRADIENTS.map(function (g, i) { return '<span data-i="' + i + '" style="background:linear-gradient(135deg,' + g[0] + ',' + g[1] + ')"></span>'; }).join('');
-      function css() { return 'background: linear-gradient(' + $('#ftDeg').value + 'deg, ' + $('#ftC1').value + ', ' + $('#ftC2').value + ');\n-webkit-background-clip: text;\nbackground-clip: text;\ncolor: transparent;'; }
+    id: 'case', group: 'text', icon: 'aA', title: '命名风格转换', isNew: true, accepts: true,
+    desc: 'camelCase / snake_case / kebab-case 等变量命名互转，支持多行批量', kw: 'mmfg 驼峰 下划线 命名 camel snake kebab case',
+    render: function (el, ctx) {
+      el.innerHTML = '<div class="pane"><div class="pane-head"><h3>输入（每行一个）</h3></div><div class="pane-body flush"><textarea id="in" data-persist style="min-height:120px">getUserInfo\nuser_profile_id\nHTTPRequestHandler</textarea></div></div>' +
+        '<div class="pane"><div class="pane-body"><table class="kv" id="out"></table></div></div>';
       function run() {
-        var s = $('#ftIn').value;
-        var g = $('#ftGrad'); g.textContent = s || ' '; g.setAttribute('style', css().replace(/\n/g, ''));
-        $('#ftList').innerHTML = FANCY.map(function (f, i) {
-          return '<li><span class="muted" style="width:60px;flex:none">' + f[0] + '</span><span style="flex:1;font-size:1.1rem" id="ft' + i + '">' + esc(f[1](s)) + '</span><button class="btn ghost sm" data-copy="' + i + '">复制</button></li>';
+        var lines = $('#in', el).value.split(/\r?\n/).filter(function (l) { return l.trim(); });
+        $('#out', el).innerHTML = CASES.map(function (c, i) {
+          var v = lines.map(function (l) { var w = words(l); return w.length ? c[1](w) : ''; }).join('\n');
+          return '<tr><th>' + c[0] + '</th><td class="mono" style="white-space:pre-wrap" id="c' + i + '">' + esc(v) + '</td><td style="width:60px"><button class="btn sm" data-copy="#c' + i + '">复制</button></td></tr>';
         }).join('');
       }
-      el.addEventListener('input', run);
-      el.addEventListener('click', function (e) {
-        var c = e.target.getAttribute('data-copy');
-        if (c !== null) App.copy($('#ft' + c).textContent);
-        var p = e.target.getAttribute('data-i');
-        if (p !== null) { $('#ftC1').value = GRADIENTS[p][0]; $('#ftC2').value = GRADIENTS[p][1]; run(); }
-      });
-      $('#ftCss').onclick = function () { App.copy(css()); };
-      run();
+      $('#in', el).addEventListener('input', run);
+      ctx.persist(); if (ctx.input) $('#in', el).value = ctx.input; run();
     }
   });
 
-  /* ---------------- 去除重复项 ---------------- */
+  /* ===== 人民币大写 ===== */
+  function rmb(input) {
+    var s = String(input).replace(/[,，\s¥￥]/g, '');
+    if (!/^-?\d+(\.\d+)?$/.test(s)) throw new Error('请输入合法的金额');
+    var neg = s[0] === '-'; if (neg) s = s.slice(1);
+    var parts = s.split('.'), ip = parts[0].replace(/^0+(?=\d)/, ''), dp = ((parts[1] || '') + '00').slice(0, 2);
+    if (ip.length > 12) throw new Error('最多支持千亿级（12 位整数）');
+    var D = '零壹贰叁肆伍陆柒捌玖', U = ['', '拾', '佰', '仟'], BU = ['', '万', '亿'], r = '';
+    if (+ip > 0) {
+      var z = 0;
+      for (var i = 0; i < ip.length; i++) {
+        var p = ip.length - i - 1, d = +ip[i], q = Math.floor(p / 4), m = p % 4;
+        if (d === 0) z++; else { if (z > 0) r += '零'; z = 0; r += D[d] + U[m]; }
+        if (m === 0 && z < 4) r += BU[q];
+      }
+      r += '元';
+    }
+    var j = +dp[0], f = +dp[1];
+    if (!j && !f) return (neg ? '负' : '') + (r || '零元') + '整';
+    if (j) r += D[j] + '角'; else if (r) r += '零';
+    r += f ? D[f] + '分' : '整';
+    return (neg ? '负' : '') + r;
+  }
   App.register({
-    id: 'dedupe', group: 'text', icon: '≡', title: '去除重复项',
-    desc: '按行去除文本中的重复内容，支持排序、去空行', keywords: '去重 重复 行 排序',
-    render: function (el) {
-      el.innerHTML = '<div class="row"><label><input type="checkbox" id="ddTrim" checked>忽略首尾空格</label><label><input type="checkbox" id="ddEmpty" checked>删除空行</label><label><input type="checkbox" id="ddCase">忽略大小写</label>' +
-        '<select id="ddSort" class="w-s" style="flex:0 0 140px"><option value="">保持原顺序</option><option value="asc">升序排列</option><option value="desc">降序排列</option></select>' +
-        '<button class="btn" id="ddRun">去重</button><button class="btn ghost" id="ddCopy">复制结果</button></div>' +
-        '<div class="cols"><div><label class="field-label">原始文本（每行一项）</label><textarea id="ddIn" style="min-height:360px">apple\nbanana\napple\norange\nBanana\n\nbanana</textarea></div>' +
-        '<div><label class="field-label">结果 <span id="ddInfo" class="muted"></span></label><textarea id="ddOut" style="min-height:360px" readonly></textarea></div></div>';
+    id: 'rmb', group: 'text', icon: '¥', title: '人民币大写', accepts: true,
+    desc: '数字金额转换为中文大写，适用于票据、合同', kw: 'rmb dx 金额 大写 财务',
+    render: function (el, ctx) {
+      el.innerHTML = '<div class="pane"><div class="pane-body"><div class="field"><label>金额</label><input type="text" id="in" data-persist value="1234567.89" style="font-size:20px;font-family:var(--mono)"></div>' +
+        '<div class="field"><label>大写</label><div class="out big" id="out"></div></div><div class="inline"><button class="btn primary" data-copy="#out">复制大写</button><span class="msg" id="sm"></span></div></div></div>';
       function run() {
-        var lines = $('#ddIn').value.split(/\r?\n/), seen = {}, out = [];
-        var trim = $('#ddTrim').checked, empty = $('#ddEmpty').checked, ic = $('#ddCase').checked;
-        lines.forEach(function (l) {
-          var v = trim ? l.trim() : l;
-          if (empty && !v.trim()) return;
-          var key = ic ? v.toLowerCase() : v;
-          if (Object.prototype.hasOwnProperty.call(seen, key)) return;
-          seen[key] = 1; out.push(v);
-        });
-        var sort = $('#ddSort').value;
-        if (sort) { out.sort(function (a, b) { return a.localeCompare(b, 'zh-CN'); }); if (sort === 'desc') out.reverse(); }
-        $('#ddOut').value = out.join('\n');
-        $('#ddInfo').textContent = '原 ' + lines.length + ' 行 → ' + out.length + ' 行，移除 ' + (lines.length - out.length) + ' 行';
+        var v = $('#in', el).value.trim(), o = $('#out', el);
+        if (!v) { o.textContent = ''; return; }
+        try { o.textContent = rmb(v); o.classList.remove('err'); var n = +v.replace(/[,，\s¥￥]/g, ''); $('#sm', el).textContent = isNaN(n) ? '' : '¥' + n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+        catch (e) { o.textContent = e.message; o.classList.add('err'); }
       }
-      $('#ddRun').onclick = run;
-      $('#ddCopy').onclick = function () { App.copy($('#ddOut').value); };
-      run();
+      $('#in', el).addEventListener('input', run);
+      ctx.persist(); if (ctx.input) $('#in', el).value = ctx.input.trim(); run();
     }
   });
 
-  /* ---------------- 字数统计 ---------------- */
+  /* ===== Markdown ===== */
+  var MD = '# Markdown 编辑器\n\n左侧编辑，右侧**实时预览**，内容自动保存。\n\n- 支持 GFM 表格、任务列表\n- [x] 代码高亮块\n- `行内代码`\n\n```js\nconsole.log("千机匣");\n```\n\n> 引用文字\n\n| 工具 | 分类 |\n| --- | --- |\n| 二维码生成 | 二维码工坊 |\n';
   App.register({
-    id: 'wordcount', group: 'text', icon: '123', title: '字数统计',
-    desc: '统计字符、汉字、单词、行数，实时计数', keywords: '字数 字符 统计 计数',
-    render: function (el) {
-      el.innerHTML = '<textarea id="wcIn" placeholder="在此输入或粘贴文本…" style="min-height:280px"></textarea><div class="stats" id="wcStats"></div>';
-      function run() {
-        var t = $('#wcIn').value;
-        var chars = Array.from(t).length;
-        var noSpace = Array.from(t.replace(/\s/g, '')).length;
-        var cjk = (t.match(/[\u4e00-\u9fa5\u3400-\u4dbf\uf900-\ufaff]/g) || []).length;
-        var words = (t.match(/[A-Za-z]+(?:['’-][A-Za-z]+)*/g) || []).length;
-        var nums = (t.match(/\d+(\.\d+)?/g) || []).length;
-        var punct = (t.match(/[\u3000-\u303f\uff00-\uffef!-/:-@[-`{-~]/g) || []).length;
-        var lines = t ? t.split(/\r?\n/).length : 0;
-        var paras = t.split(/\n\s*\n|\n/).filter(function (p) { return p.trim(); }).length;
-        var bytes = new TextEncoder().encode(t).length;
-        var data = [['总字符', chars], ['不含空白', noSpace], ['汉字', cjk], ['英文单词', words], ['数字', nums], ['标点符号', punct], ['行数', lines], ['段落', paras], ['UTF-8 字节', bytes], ['字数(汉字+单词)', cjk + words]];
-        $('#wcStats').innerHTML = data.map(function (d) { return '<div class="stat"><b>' + d[1] + '</b><span>' + d[0] + '</span></div>'; }).join('');
-      }
-      $('#wcIn').addEventListener('input', run);
-      run();
-    }
-  });
-
-  /* ---------------- 在线记事本 ---------------- */
-  App.register({
-    id: 'notepad', group: 'text', icon: '✎', title: '在线记事本',
-    desc: '浏览器本地保存，自动存储，支持下载', keywords: '记事本 笔记 note',
-    render: function (el) {
-      el.innerHTML = '<div class="row"><button class="btn" id="npDl">下载 .txt</button><button class="btn ghost" id="npCopy">复制全部</button><button class="btn danger" id="npClear">清空</button><span class="muted" id="npStatus"></span></div>' +
-        '<textarea id="npIn" style="min-height:460px;font-family:inherit;font-size:1rem" placeholder="在这里记录点什么…内容会自动保存到浏览器本地"></textarea>';
-      var ta = $('#npIn'), timer;
-      ta.value = localStorage.getItem('tool_notepad') || '';
-      function status() {
-        var at = localStorage.getItem('tool_notepad_at');
-        $('#npStatus').textContent = (at ? '已自动保存 ' + new Date(+at).toLocaleTimeString() : '尚未保存') + ' · ' + Array.from(ta.value).length + ' 字';
-      }
-      ta.addEventListener('input', function () {
-        clearTimeout(timer);
-        timer = setTimeout(function () { localStorage.setItem('tool_notepad', ta.value); localStorage.setItem('tool_notepad_at', Date.now()); status(); }, 300);
-      });
-      $('#npDl').onclick = function () { App.download('notepad-' + new Date().toISOString().slice(0, 10) + '.txt', ta.value); };
-      $('#npCopy').onclick = function () { App.copy(ta.value); };
-      $('#npClear').onclick = function () { if (confirm('确定清空记事本吗？')) { ta.value = ''; localStorage.removeItem('tool_notepad'); localStorage.removeItem('tool_notepad_at'); status(); } };
-      status();
+    id: 'markdown', group: 'text', icon: 'MD', title: 'Markdown 编辑器', accepts: true,
+    desc: '实时预览，导出 HTML / Markdown 文件', kw: 'markdown md bjq 编辑器 预览',
+    scripts: ['vendor/marked.min.js', 'vendor/purify.min.js'],
+    render: function (el, ctx) {
+      el.innerHTML = '<div class="grid2"><div class="pane"><div class="pane-head"><h3>编辑</h3><button class="btn sm" id="dlmd">.md</button><button class="btn sm" id="dlhtml">.html</button></div><div class="pane-body flush"><textarea id="in" data-persist style="min-height:600px"></textarea></div></div>' +
+        '<div class="pane"><div class="pane-head"><h3>预览</h3><button class="btn sm" id="cphtml">复制 HTML</button></div><div class="pane-body flush"><div class="md" id="out" style="height:600px"></div></div></div></div>';
+      function html() { return DOMPurify.sanitize(marked.parse($('#in', el).value, { gfm: true, breaks: true })); }
+      function run() { $('#out', el).innerHTML = html(); }
+      $('#in', el).addEventListener('input', run);
+      $('#cphtml', el).onclick = function () { App.copy(html()); };
+      $('#dlmd', el).onclick = function () { App.download('document.md', $('#in', el).value); };
+      $('#dlhtml', el).onclick = function () { App.download('document.html', '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Document</title></head><body>' + html() + '</body></html>', 'text/html'); };
+      $('#in', el).value = MD; ctx.persist(); if (ctx.input) $('#in', el).value = ctx.input; run();
     }
   });
 })();
